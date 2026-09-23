@@ -1,0 +1,53 @@
+name: Hermes Monitor Job
+
+on:
+  workflow_dispatch: # 關鍵：允許透過 API 或 GitHub 網頁按鈕觸發
+  # schedule:         # 可以把內建 schedule 註解掉，完全交給 Cron-job.org 掌控
+  #   - cron: '3/10 1-15 * * *'
+
+jobs:
+  scrape_and_notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 1. 安裝 uv (關閉 uv.lock 檢查)
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+
+      # 2. 極速安裝依賴套件
+      - name: Install Dependencies
+        run: |
+          uv pip install --system -r requirements.txt
+
+      # 3. 快取 Playwright 瀏覽器二進位檔
+      - name: Cache Playwright Browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+
+      # 4. 安裝 Playwright Chromium
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          playwright install chromium --with-deps
+
+      # 5. 執行監控腳本
+      - name: Run Monitor Script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+        run: python monitor.py
