@@ -4,6 +4,7 @@ import asyncio
 import requests
 from playwright.async_api import async_playwright
 
+# 1. 讀取環境變數
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
@@ -11,6 +12,15 @@ UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 HERMES_TW_BAGS_URL = "https://www.hermes.com/tw/zh/category/leather-goods/bags-and-clutches/womens-bags-and-clutches/"
 REDIS_KEY = "hermes:seen_bags"
+
+def sanitize_log_message(msg: str) -> str:
+    """自動過濾 Log 訊息中的敏感環境變數金鑰"""
+    clean_msg = str(msg)
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_TOKEN in clean_msg:
+        clean_msg = clean_msg.replace(TELEGRAM_BOT_TOKEN, "***MASKED_TG_TOKEN***")
+    if UPSTASH_TOKEN and UPSTASH_TOKEN in clean_msg:
+        clean_msg = clean_msg.replace(UPSTASH_TOKEN, "***MASKED_UPSTASH_TOKEN***")
+    return clean_msg
 
 def extract_product_id(url):
     """從愛馬仕商品網址中提取商品 ID (例如 H087970CT18)"""
@@ -23,7 +33,7 @@ def extract_product_id(url):
     return re.sub(r'[^a-zA-Z0-9_-]', '', last_segment)
 
 def send_telegram_notification(title, link):
-    """傳送 Telegram 通知"""
+    """傳送 Telegram 通知 (具備金鑰遮蔽防護)"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("⚠️ 未設定 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，跳過發送。")
         return
@@ -48,10 +58,11 @@ def send_telegram_notification(title, link):
         response.raise_for_status()
         print(f"✅ Telegram 通知發送成功: {title}")
     except Exception as e:
-        print(f"❌ Telegram 發送失敗 ({title}): {e}")
+        safe_error = sanitize_log_message(e)
+        print(f"❌ Telegram 發送失敗 ({title}): {safe_error}")
 
 def upstash_command(command, *args):
-    """封裝 Upstash REST API 請求"""
+    """封裝 Upstash REST API 請求 (具備金鑰遮蔽防護)"""
     if not UPSTASH_URL or not UPSTASH_TOKEN:
         print("⚠️ 未設定 Upstash Redis URL 或 Token，無法進行數據去重。")
         return None
@@ -65,7 +76,8 @@ def upstash_command(command, *args):
         response.raise_for_status()
         return response.json().get("result")
     except Exception as e:
-        print(f"❌ Upstash API 呼叫失敗 ({command}): {e}")
+        safe_error = sanitize_log_message(e)
+        print(f"❌ Upstash API 呼叫失敗 ({command}): {safe_error}")
         return None
 
 def get_current_seen_ids():
@@ -77,10 +89,7 @@ def get_current_seen_ids():
 
 def replace_seen_ids(product_ids):
     """以當前線上的商品 ID 清單全量覆蓋 Redis (DEL + SADD)"""
-    # 1. 刪除舊有集合
     upstash_command("del", REDIS_KEY)
-    
-    # 2. 寫入最新的商品 ID 集合
     if product_ids:
         upstash_command("sadd", REDIS_KEY, *list(product_ids))
 
@@ -91,7 +100,10 @@ async def fetch_hermes_bags():
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
-                '--disable-setuid-sandbox'
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu'
             ]
         )
         
@@ -104,6 +116,7 @@ async def fetch_hermes_bags():
         
         page = await context.new_page()
         
+        # 繞過基礎自動化檢測
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
@@ -120,6 +133,7 @@ async def fetch_hermes_bags():
             except Exception:
                 print("⚠️ 等待 Timeout，強制向下滾動頁面...")
             
+            # 觸發懶載入（Lazy Loading）圖片與 DOM 節點
             await page.evaluate("window.scrollBy(0, 600)")
             await asyncio.sleep(2)
 
@@ -157,9 +171,13 @@ async def fetch_hermes_bags():
             return bags
 
         except Exception as e:
-            print(f"❌ 抓取失敗: {e}")
-            await page.screenshot(path="error_screenshot.png")
-            return None  # 注意：爬蟲出錯時傳回 None，避免清空 Redis
+            safe_error = sanitize_log_message(e)
+            print(f"❌ 抓取失敗: {safe_error}")
+            try:
+                await page.screenshot(path="error_screenshot.png")
+            except Exception:
+                pass
+            return None  # 傳回 None 以觸發防護機制，維持 Redis 舊數據完整性
         finally:
             await browser.close()
 
