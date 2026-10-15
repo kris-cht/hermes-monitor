@@ -1,9 +1,7 @@
 name: Hermes Monitor Job
 
 on:
-  workflow_dispatch: # 允許透過 API 或 GitHub 網頁按鈕觸發
-  # schedule:         # 可以把內建 schedule 註解掉，完全交給 Cron-job.org 掌控
-  #   - cron: '3/10 1-15 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape_and_notify:
@@ -18,34 +16,30 @@ jobs:
         with:
           python-version: '3.11'
 
-      # 1. 安裝 uv
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: false
 
-      # 2. 安裝依賴套件
       - name: Install Dependencies
         run: |
           uv pip install --system -r requirements.txt
 
-      # 3. 快取 Playwright 瀏覽器二進位檔 (⚠️ 這裡調整了 Key 的版本字串，會強制重新建立乾淨快取)
+      # 1. 乾淨的快取設定（不再使用 v2）
       - name: Cache Playwright Browsers
         uses: actions/cache@v4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-v2-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-v2-
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
 
-      # 4. 確保安裝 Chromium 及其系統相依套件
-      # 如果剛才換了 key 沒命中，這步會完整下載；如果命中了，Playwright 會自動跳過下載，速度一樣飛快
-      - name: Install Playwright Chromium & Dependencies
+      # 2. 只有在快取未命中時才下載（第一次會下載並建立快取，之後就會瞬間跳過）
+      - name: Install Playwright Chromium (Only if Cache Miss)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           playwright install chromium --with-deps
 
-      # 5. 執行監控腳本
+      # 3. 執行監控腳本
       - name: Run Monitor Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
