@@ -37,11 +37,17 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
 
-      # 4. 安裝 Playwright Chromium
-      - name: Install Playwright Chromium
+      # 4A. 若無快取：完整安裝 Playwright Chromium 與系統依賴
+      - name: Install Playwright Chromium (No Cache)
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           playwright install chromium --with-deps
+
+      # 4B. 若有快取：僅補齊系統層級依賴 (解決缺少 .so 檔案或路徑錯誤的問題)
+      - name: Install Playwright System Dependencies (Cache Hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: |
+          playwright install-deps chromium
 
       # 5. 執行監控腳本
       - name: Run Monitor Script
